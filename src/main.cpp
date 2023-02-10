@@ -1,62 +1,10 @@
-/*******************************************************************************************************************
-*
-*                         ESP32Cam development board demo sketch using Arduino IDE or PlatformIO
-*                                    Github: https://github.com/alanesq/ESP32Cam-demo
-*
-*                                     Tested with ESP32 board manager version  1.0.6
-*
-*     Starting point sketch for projects using the esp32cam development board with the following features
-*        web server with live video streaming and RGB data from camera demonstrated.
-*        sd card support using 1-bit mode (data pins are usually 2,4,12&13 but using 1bit mode only uses pin 2)
-*        flash led is still available for use (pin 4) and does not flash when accessing sd card
-*        Stores image in Spiffs if no sd card present
-*        PWM control of the illumination/flash LED
-*
-*     GPIO:
-*        You can use io pins 13 and 12 for input or output (but 12 must not be high at boot)
-*        You could also use pins 1 & 3 if you do not use Serial (disable serialDebug in the settings below)
-*        Pins 14, 2 & 15 should be ok to use if you are not using an SD Card
-*        More info:   https://randomnerdtutorials.com/esp32-cam-ai-thinker-pinout/
-*
-*     You can use a MCP23017 io expander chip to give 16 gpio lines by enabling 'useMCP23017' in the setup section and connecting
-*        the i2c pins to 12 and 13 on the esp32cam module.  Note: this requires the adafruit MCP23017 library to be installed.
-*
-*     Created using the Arduino IDE with ESP32 module installed, no additional libraries required
-*        ESP32 support for Arduino IDE: https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
-*
-*     Info on the esp32cam board:  https://randomnerdtutorials.com/esp32-cam-video-streaming-face-recognition-arduino-ide/
-*                                  https://github.com/espressif/esp32-camera
-*
-*     To see a more advanced sketch along the same format as this one have a look at https://github.com/alanesq/CameraWifiMotion
-*        which includes email support, FTP, OTA updates and motion detection
-*
-*     esp32cam-demo is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the
-*        implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
-*
-*
-*******************************************************************************************************************/
-
 #if !defined ESP32
  #error This sketch is only for an ESP32Cam module
 #endif
 
 #include "esp_camera.h"         // https://github.com/espressif/esp32-camera
 
-//   ---------------------------------------------------------------------------------------------------------
-
-
-//         Wifi Settings - uncomment and set here if not stored in platformio.ini
-
-//  #define SSID_NAME "Wifi SSID"
-//  #define SSID_PASWORD "wifi password"
-
-
-//   ---------------------------------------------------------------------------------------------------------
-
-
-// Required by PlatformIO
-
- #include <Arduino.h>
+#include <Arduino.h>
 
  // forward declarations
    bool initialiseCamera();
@@ -69,6 +17,8 @@
    bool handleImg();
    void handleNotFound();
    void readRGBImage();
+   void getrgbjson();
+   void getrgbjsonnoflash();
    bool getNTPtime(int sec);
    bool handleJPG();
    void handleStream();
@@ -85,7 +35,6 @@
 // ---------------------------------------------------------------
 
  const char* stitle = "ESP32Cam-demo";                  // title of this sketch
- const char* sversion = "25Jan22";                      // Sketch version
 
  bool sendRGBfile = 0;                                  // if set '/rgb' will just return raw rgb data which can be saved as a file rather than display a HTML pag
 
@@ -104,9 +53,9 @@
                                                         //               320x240 (QVGA), 400x296 (CIF), 640x480 (VGA, default), 800x600 (SVGA),
                                                         //               1024x768 (XGA), 1280x1024 (SXGA), 1600x1200 (UXGA)
    #define PIXFORMAT PIXFORMAT_JPEG;                    // image format, Options =  YUV422, GRAYSCALE, RGB565, JPEG, RGB888
-   int cameraImageExposure = 0;                         // Camera exposure (0 - 1200)   If gain and exposure both set to zero then auto adjust is enabled
-   int cameraImageGain = 0;                             // Image gain (0 - 30)
-   int cameraImageBrightness = 0;                       // Image brightness (-2 to +2)
+   int cameraImageExposure = 3;                         // Camera exposure (0 - 1200)   If gain and exposure both set to zero then auto adjust is enabled
+   int cameraImageGain = 1;                             // Image gain (0 - 30)
+   int cameraImageBrightness = 1;                       // Image brightness (-2 to +2)
 
  const int TimeBetweenStatus = 600;                     // speed of flashing system running ok status light (milliseconds)
 
@@ -163,6 +112,7 @@
 #include <WebServer.h>
 #include <HTTPClient.h>
 #include "driver/ledc.h"        // used to configure pwm on illumination led
+#include <AsyncElegantOTA.h>
 
 // spiffs used to store images if no sd card present
  #include <SPIFFS.h>
@@ -211,7 +161,7 @@ void setup() {
 
    Serial.println("\n\n\n");                      // line feeds
    Serial.println("-----------------------------------");
-   Serial.printf("Starting - %s - %s \n", stitle, sversion);
+   Serial.printf("Starting - %s - %s \n", stitle);
    Serial.println("-----------------------------------");
    // Serial.print("Reset reason: " + ESP.getResetReason());
  }
@@ -250,7 +200,8 @@ void setup() {
    server.on("/photo", handlePhoto);             // save image to sd card
    server.on("/img", handleImg);                 // show image from sd card
    server.on("/rgb", readRGBImage);              // demo converting image to RGB
-   server.on("/test", handleTest);               // Testing procedure
+   server.on("/getrgbjson", getrgbjson);              //andre's rgb json
+   server.on("/getrgbjsonnoflash", getrgbjsonnoflash);     //andre's rgb json no flash
    server.onNotFound(handleNotFound);            // invalid url requested
 
  // NTP - internet time
@@ -348,7 +299,7 @@ setupFlashPWM();    // configure PWM for the illumination LED
 
  // startup complete
    if (serialDebug) Serial.println("\nStarted...");
-   flashLED(2);     // flash the onboard indicator led
+   //flashLED(2);     // flash the onboard indicator led
    brightLed(64);    // change bright LED
    delay(200);
    brightLed(0);    // change bright LED
@@ -368,43 +319,10 @@ void loop() {
 
  server.handleClient();          // handle any incoming web page requests
 
-
-
-
-
-
- //                           <<< YOUR CODE HERE >>>
-
-
-
-
-
-
-//  //  Capture an image and save to sd card every 5 seconds (i.e. time lapse)
-//      static uint32_t lastCamera = millis();
-//      if ( ((unsigned long)(millis() - lastCamera) >= 5000) && sdcardPresent ) {
-//        lastCamera = millis();     // reset timer
-//        storeImage();              // save an image to sd card
-//        if (serialDebug) Serial.println("Time lapse image captured");
-//      }
-
- // flash status LED to show sketch is running ok
-   if ((unsigned long)(millis() - lastStatus) >= TimeBetweenStatus) {
-     lastStatus = millis();                                               // reset timer
-     digitalWrite(indicatorLED,!digitalRead(indicatorLED));               // flip indicator led status
-   }
-
-}  // loop
-
-
-
-// ******************************************************************************************************************
-
-
+}
 // ----------------------------------------------------------------
 //                        Initialise the camera
-// ----------------------------------------------------------------
-// returns TRUE if successful
+// ---------------------------------------------------------------
 
 bool initialiseCamera() {
 
@@ -441,11 +359,6 @@ bool initialiseCamera() {
      if (serialDebug) Serial.println("Warning: No PSRam found so defaulting to image size 'CIF'");
      config.frame_size = FRAMESIZE_CIF;
    }
-
-   //#if defined(CAMERA_MODEL_ESP_EYE)
-   //  pinMode(13, INPUT_PULLUP);
-   //  pinMode(14, INPUT_PULLUP);
-   //#endif
 
    esp_err_t camerr = esp_camera_init(&config);  // initialise the camera
    if (camerr != ESP_OK) {
@@ -520,7 +433,7 @@ bool cameraImageSettings() {
 //    s->set_hmirror(s, 0);                         // (0 or 1) flip horizontally
 //    s->set_colorbar(s, 0);                        // (0 or 1) - show a testcard
 //    s->set_special_effect(s, 0);                  // (0 to 6?) apply special effect
-//    s->set_whitebal(s, 0);                        // white balance enable (0 or 1)
+//s->set_whitebal(s, 0);                        // white balance enable (0 or 1)
 //    s->set_awb_gain(s, 1);                        // Auto White Balance enable (0 or 1)
 //    s->set_wb_mode(s, 0);                         // 0 to 4 - if awb_gain enabled (0 - Auto, 1 - Sunny, 2 - Cloudy, 3 - Office, 4 - Home)
 //    s->set_dcw(s, 0);                             // downsize enable? (1 or 0)?
@@ -549,11 +462,11 @@ void setupFlashPWM() {
 
 
 // change illumination LED brightness
- void brightLed(byte ledBrightness){
+void brightLed(byte ledBrightness){
    brightLEDbrightness = ledBrightness;    // store setting
    ledcWrite(ledChannel, ledBrightness);   // change LED brightness (0 - 255)
    if (serialDebug) Serial.println("Brightness changed to " + String(ledBrightness) );
- }
+}
 
 
 // ----------------------------------------------------------------
@@ -579,6 +492,14 @@ void flashLED(int reps) {
    digitalWrite(indicatorLED,HIGH);
    delay(500);
  }
+}
+
+void sendHeaderJson(WiFiClient &client) {
+  // Start page
+      client.write("HTTP/1.1 200 OK\r\n");
+      client.write("Content-Type: application/json\r\n");
+      client.write("Connection: close\r\n");
+      client.write("\r\n");
 }
 
 
@@ -768,10 +689,6 @@ byte storeImage() {
 
 } // storeImage
 
-
-// ******************************************************************************************************************
-
-
 // ----------------------------------------------------------------
 //            -Action any user input on root web page
 // ----------------------------------------------------------------
@@ -858,13 +775,8 @@ void rootUserInput(WiFiClient &client) {
               }
             }
          }
-  }
+  } // rootUserInput
 
-
-// ----------------------------------------------------------------
-//       -root web page requested    i.e. http://x.x.x.x/
-// ----------------------------------------------------------------
-// web page with control buttons, links etc.
 
 void handleRoot() {
 
@@ -878,29 +790,12 @@ void handleRoot() {
    client.write("<FORM action='/' method='post'>\n");            // used by the buttons in the html (action = the web page to send it to
 
 
- // --------------------------------------------------------------------
 
- // html main body
- //                    Info on the arduino ethernet library:  https://www.arduino.cc/en/Reference/Ethernet
- //                                            Info in HTML:  https://www.w3schools.com/html/
- //     Info on Javascript (can be inserted in to the HTML):  https://www.w3schools.com/js/default.asp
- //                               Verify your HTML is valid:  https://validator.w3.org/
-
-
-  // ---------------------------------------------------------------------------------------------
-    //  info which is periodically updated usin AJAX - https://www.w3schools.com/xml/ajax_intro.asp
-
-    // empty lines which are populated via vbscript with live data from http://x.x.x.x/data in the form of comma separated text
-      int noLines = 5;      // number of text lines to be populated by javascript
-      for (int i = 0; i < noLines; i++) {
+      for (int i = 0; i < 5; i++) {
         client.println("<span id='uline" + String(i) + "'></span><br>");
       }
 
-    // Javascript - to periodically update the above info lines from http://x.x.x.x/data
-    // Note: You can compact the javascript to save flash memory via https://www.textfixer.com/html/compress-html-compression.php
-    //       The below = client.printf(R"=====(  <script> function getData() { var xhttp = new XMLHttpRequest(); xhttp.onreadystatechange = function() { if (this.readyState == 4 && this.status == 200) { var receivedArr = this.responseText.split(','); for (let i = 0; i < receivedArr.length; i++) { document.getElementById('uline' + i).innerHTML = receivedArr[i]; } } }; xhttp.open('GET', 'data', true); xhttp.send();} getData(); setInterval(function() { getData(); }, %d); </script> )=====", dataRefresh * 1000);
 
-      // get a comma seperated list from http://x.x.x.x/data and populate the blank lines in html above
       client.printf(R"=====(
          <script>
             function getData() {
@@ -984,15 +879,6 @@ void handleRoot() {
 
 }  // handleRoot
 
-
-// ----------------------------------------------------------------
-//     -data web page requested     i.e. http://x.x.x.x/data
-// ----------------------------------------------------------------
-// the root web page requests this periodically via Javascript in order to display updating information.
-// information in the form of comma seperated text is supplied which are then inserted in to blank lines on the web page
-// This makes it very easy to modify the data shown without having to change the javascript or root page html
-// Note: to change the number of lines displayed update variable 'noLines' in handleroot()
-
 void handleData(){
 
   // sd sdcard info
@@ -1036,16 +922,7 @@ void handleData(){
 
 
    server.send(200, "text/plane", reply); //Send millis value only to client ajax request
-}
-
-
-// ******************************************************************************************************************
-
-
-// ----------------------------------------------------------------
-//    -photo save to sd card/spiffs    i.e. http://x.x.x.x/photo
-// ----------------------------------------------------------------
-// web page to capture an image from camera and save to spiffs or sd card
+} //handeData
 
 void handlePhoto() {
 
@@ -1075,14 +952,6 @@ void handlePhoto() {
    sendFooter(client);
 
 }  // handlePhoto
-
-
-
-// ----------------------------------------------------------------
-// -display image stored on sd card or SPIFFS   i.e. http://x.x.x.x/img?img=x
-// ----------------------------------------------------------------
-// Display a previously stored image, default image = most recent
-// returns 1 if image displayed ok
 
 bool handleImg() {
 
@@ -1157,15 +1026,6 @@ bool handleImg() {
 
 }  // handleImg
 
-
-// ******************************************************************************************************************
-
-
-// ----------------------------------------------------------------
-//                      -invalid web page requested
-// ----------------------------------------------------------------
-// Note: shows a different way to send the HTML reply
-
 void handleNotFound() {
 
  String tReply;
@@ -1190,22 +1050,143 @@ void handleNotFound() {
 
 }  // handleNotFound
 
+void getrgbjson() {
+  WiFiClient client = server.client();
+  // json header
+   sendHeaderJson(client);
+  uint32_t tTimer;     // used to time tasks    
 
-// ******************************************************************************************************************
+  // make sure psram is available
+  if (!psramFound()) {
+    sendText(client,"error: no psram available to store the RGB data");
+    client.write("<br><a href='/'>Return</a>\n");       // link back
+    if (!sendRGBfile) sendFooter(client);               // close web page
+    return;
+  }
 
+  brightLed(128);
+  camera_fb_t * fb = NULL;
+  fb = esp_camera_fb_get();
+  if (!fb) {
+    sendText(client,"error: failed to capture image from camera");
+    if (!sendRGBfile) sendFooter(client);               // close web page
+    return;
+  }
 
-// ----------------------------------------------------------------
-//      -access image data as RGB - i.e. http://x.x.x.x/rgb
-// ----------------------------------------------------------------
-//Demonstration on how to access raw RGB data from the camera
-// Notes:
-//     Set sendRGBfile to 1 in the settings at top of sketch to just send the raw rgb data as a file which can then be used with
-//       the Processing sketch: https://github.com/alanesq/esp32cam-demo/blob/master/Misc/displayRGB.pde
-//       otherwise a web page is displayed showing some sample rgb data usage.
-//     You may want to disable auto white balance when experimenting with RGB otherwise the camera is always trying to adjust the
-//        image colours to mainly white.   (disable in the 'cameraImageSettings' procedure).
-//     It will fail on the higher resolutions as it requires more than the 4mb of available psram to store the data (1600x1200x3 bytes)
-//     I learned how to read the RGB data from: https://github.com/Makerfabs/Project_Touch-Screen-Camera/blob/master/Camera_v2/Camera_v2.ino
+  void *ptrVal = NULL;                                                                                 // create a pointer for memory location to store the data
+  uint32_t ARRAY_LENGTH = fb->width * fb->height * 3;                                                  // calculate memory required to store the RGB data (i.e. number of pixels in the jpg image x 3)
+  if (heap_caps_get_free_size( MALLOC_CAP_SPIRAM) <  ARRAY_LENGTH) {
+    sendText(client,"error: not enough free psram to store the rgb data");
+    return;
+  }
+  ptrVal = heap_caps_malloc(ARRAY_LENGTH, MALLOC_CAP_SPIRAM);                                          // allocate memory space for the rgb data
+  uint8_t *rgb = (uint8_t *)ptrVal;                                                                    // create the 'rgb' array pointer to the allocated memory space
+
+  bool jpeg_converted = fmt2rgb888(fb->buf, fb->len, PIXFORMAT_JPEG, rgb);
+  if (!jpeg_converted) {
+    sendText(client,"error: failed to convert image to RGB data");
+
+    return;
+  }
+
+  if (sendRGBfile) {
+    client.write(rgb, ARRAY_LENGTH);          // send the raw rgb data
+    esp_camera_fb_return(fb);                 // camera frame buffer
+    delay(3);
+    client.stop();
+    return;
+  }
+
+  // find the average values for each colour over entire image
+  uint32_t aRed = 0;
+  uint32_t aGreen = 0;
+  uint32_t aBlue = 0;
+  for (uint32_t i = 0; i < (ARRAY_LENGTH - 2); i+=3) {                                               // go through all data and add up totals
+    aBlue+=rgb[i];
+    aGreen+=rgb[i+1];
+    aRed+=rgb[i+2];
+  }
+  aRed = aRed / (fb->width * fb->height);                                                            // divide total by number of pixels to give the average value
+  aGreen = aGreen / (fb->width * fb->height);
+  aBlue = aBlue / (fb->width * fb->height);
+
+  if (!sendRGBfile) client.print("{\"red\": " + String(aRed) + ", \"green\": " + String(aGreen) + ", \"blue\": " + String(aBlue) + "}");
+
+  // finished with the data so free up the memory space used in psram
+  esp_camera_fb_return(fb);   // camera frame buffer
+  heap_caps_free(ptrVal);     // rgb data
+
+  //ledcWrite(ledChannel, 0);   // change LED brightness (0 - 255)
+  brightLed(0);
+
+} //getrgbjson
+
+void getrgbjsonnoflash() {
+  WiFiClient client = server.client();
+  uint32_t tTimer;     // used to time tasks    
+  // json header
+   sendHeaderJson(client);
+
+  // make sure psram is available
+  if (!psramFound()) {
+    sendText(client,"error: no psram available to store the RGB data");
+    client.write("<br><a href='/'>Return</a>\n");       // link back
+    if (!sendRGBfile) sendFooter(client);               // close web page
+    return;
+  }
+
+  //brightLed(128);
+  camera_fb_t * fb = NULL;
+  fb = esp_camera_fb_get();
+  if (!fb) {
+    sendText(client,"error: failed to capture image from camera");
+    if (!sendRGBfile) sendFooter(client);               // close web page
+    return;
+  }
+
+  void *ptrVal = NULL;                                                                                 // create a pointer for memory location to store the data
+  uint32_t ARRAY_LENGTH = fb->width * fb->height * 3;                                                  // calculate memory required to store the RGB data (i.e. number of pixels in the jpg image x 3)
+  if (heap_caps_get_free_size( MALLOC_CAP_SPIRAM) <  ARRAY_LENGTH) {
+    sendText(client,"error: not enough free psram to store the rgb data");
+    return;
+  }
+  ptrVal = heap_caps_malloc(ARRAY_LENGTH, MALLOC_CAP_SPIRAM);                                          // allocate memory space for the rgb data
+  uint8_t *rgb = (uint8_t *)ptrVal;                                                                    // create the 'rgb' array pointer to the allocated memory space
+
+  bool jpeg_converted = fmt2rgb888(fb->buf, fb->len, PIXFORMAT_JPEG, rgb);
+  if (!jpeg_converted) {
+    sendText(client,"error: failed to convert image to RGB data");
+
+    return;
+  }
+
+  if (sendRGBfile) {
+    client.write(rgb, ARRAY_LENGTH);          // send the raw rgb data
+    esp_camera_fb_return(fb);                 // camera frame buffer
+    delay(3);
+    client.stop();
+    return;
+  }
+
+  // find the average values for each colour over entire image
+  uint32_t aRed = 0;
+  uint32_t aGreen = 0;
+  uint32_t aBlue = 0;
+  for (uint32_t i = 0; i < (ARRAY_LENGTH - 2); i+=3) {                                               // go through all data and add up totals
+    aBlue+=rgb[i];
+    aGreen+=rgb[i+1];
+    aRed+=rgb[i+2];
+  }
+  aRed = aRed / (fb->width * fb->height);                                                            // divide total by number of pixels to give the average value
+  aGreen = aGreen / (fb->width * fb->height);
+  aBlue = aBlue / (fb->width * fb->height);
+
+  if (!sendRGBfile) client.print("{\"red\": " + String(aRed) + ", \"green\": " + String(aGreen) + ", \"blue\": " + String(aBlue) + "}");
+
+  // finished with the data so free up the memory space used in psram
+  esp_camera_fb_return(fb);   // camera frame buffer
+  heap_caps_free(ptrVal);     // rgb data
+} //getrgbjsonnoflash
 
 void readRGBImage() {
                                                                                             // used for timing operations
@@ -1249,16 +1230,6 @@ void readRGBImage() {
        sendText(client, "Free memory=" + String(ESP.getFreeHeap()) + " bytes");
      }
 
-/*
-   // display captured image using base64 - seems a bit unreliable especially with larger images?
-    if (!sendRGBfile) {
-      client.print("<br>Displaying image direct from frame buffer");
-      String base64data = base64::encode(fb->buf, fb->len);      // convert buffer to base64
-      client.print(" - Base64 data length = " + String(base64data.length()) + " bytes\n" );
-      client.print("<br><img src='data:image/jpg;base64," + base64data + "'></img><br>\n");
-    }
-*/
-
    // allocate memory to store the rgb data (in psram, 3 bytes per pixel)
      sendText(client,"<br>Free psram before rgb data allocated = " + String(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024) + "K");
      void *ptrVal = NULL;                                                                                 // create a pointer for memory location to store the data
@@ -1298,17 +1269,11 @@ void readRGBImage() {
      return;
    }
 
-
- //   ****** examples of using the resulting RGB data *****
-
    // display some of the resulting data
        uint32_t resultsToShow = 50;                                                                       // how much data to display
        sendText(client,"<br>R,G,B data for first " + String(resultsToShow / 3) + " pixels of image");
        for (uint32_t i = 0; i < resultsToShow-2; i+=3) {
          sendText(client,String(rgb[i+2]) + "," + String(rgb[i+1]) + "," + String(rgb[i+0]));           // Red , Green , Blue
-         // // calculate the x and y coordinate of the current pixel
-         //   uint16_t x = (i / 3) % fb->width;
-         //   uint16_t y = floor( (i / 3) / fb->width);
        }
 
    // find the average values for each colour over entire image
@@ -1339,15 +1304,6 @@ void readRGBImage() {
 
 }  // readRGBImage
 
-
-
-// ******************************************************************************************************************
-
-
-// ----------------------------------------------------------------
-//                      -get time from ntp server
-// ----------------------------------------------------------------
-
 bool getNTPtime(int sec) {
 
    uint32_t start = millis();      // timeout timer
@@ -1374,11 +1330,6 @@ bool getNTPtime(int sec) {
    }
  return true;
 }
-
-
-// ----------------------------------------------------------------
-//     -capture jpg image and send    i.e. http://x.x.x.x/jpg
-// ----------------------------------------------------------------
 
 bool handleJPG() {
 
@@ -1418,13 +1369,6 @@ bool handleJPG() {
     return 1;
 
 }  // handleJPG
-
-
-
-// ----------------------------------------------------------------
-//      -stream requested     i.e. http://x.x.x.x/stream
-// ----------------------------------------------------------------
-// Sends video stream - thanks to Uwe Gerlach for the code showing me how to do this
 
 void handleStream(){
 
@@ -1473,20 +1417,6 @@ void handleStream(){
 
 }  // handleStream
 
-
-// ******************************************************************************************************************
-
-
-// ----------------------------------------------------------------
-//                        request a web page
-// ----------------------------------------------------------------
-//   @param    page         web page to request
-//   @param    received     String to store response in
-//   @param    maxWaitTime  maximum time to wait for reply (ms)
-//   @returns  http code
-// see:  https://randomnerdtutorials.com/esp32-http-get-post-arduino/#http-get-1
-// to do:  limit size of reply
-
 int requestWebPage(String* page, String* received, int maxWaitTime=5000){
 
   if (serialDebug) Serial.println("requesting web page: " + *page);
@@ -1511,102 +1441,3 @@ int requestWebPage(String* page, String* received, int maxWaitTime=5000){
   return httpCode;
 
 }  // requestWebPage
-
-
-// ******************************************************************************************************************
-
-
-// ----------------------------------------------------------------
-//       -test procedure    i.e. http://x.x.x.x/test
-// ----------------------------------------------------------------
-
-void handleTest() {
-
- WiFiClient client = server.client();                                                        // open link with client
-
- // log page request including clients IP
-   IPAddress cIP = client.remoteIP();
-   if (serialDebug) Serial.println("Test page requested by " + cIP.toString());
-
- // html header
-   sendHeader(client, "Testing");
-
-
- // html body
-
-
- // -------------------------------------------------------------------
-
-
-
-
-                          // test code goes here
-
-
-
-
-// demo of drawing on the camera image using javascript / html canvas
-//   could be of use to show area of interest on the image etc. - see https://www.w3schools.com/html/html5_canvas.asp
-// creat a DIV and put image in it with a html canvas on top of it
-  int imageWidth = 640;   // image dimensions on web page
-  int imageHeight = 480;
-  client.println("<div style='display:inline-block;position:relative;'>");
-  client.println("<img style='position:absolute;z-index:10;' src='/jpg' width='" + String(imageWidth) + "' height='" + String(imageHeight) + "' />");
-  client.println("<canvas style='position:relative;z-index:20;' id='myCanvas' width='" + String(imageWidth) + "' height='" + String(imageHeight) + "'></canvas>");
-  client.println("</div>");
-// javascript to draw on the canvas
-  client.println("<script>");
-  client.println("var imageWidth = " + String(imageWidth) + ";");
-  client.println("var imageHeight = " + String(imageHeight) + ";");
-  client.print (R"=====(
-    // connect to the canvas
-      var c = document.getElementById("myCanvas");
-      var ctx = c.getContext("2d");
-      ctx.strokeStyle = "red";
-    // draw on image
-      ctx.rect(imageWidth / 2, imageHeight / 2, 60, 40);                              // box
-      ctx.moveTo(20, 20); ctx.lineTo(200, 100);                                       // line
-      ctx.font = "30px Arial";  ctx.fillText("Hello World", 50, imageHeight - 50);    // text
-      ctx.stroke();
-   </script>\n)=====");
-
-
-/*
- // demo of how to request a web page
-   String page = "http://urlhere.com";   // url to request
-   String response;                             // reply will be stored here
-   int httpCode = requestWebPage(&page, &response);
-   // show results
-     client.println("Web page requested: '" + page + "' - http code: " + String(httpCode));
-     client.print("<xmp>'");     // enables the html code to be displayed
-     client.print(response);
-     client.println("'</xmp><br>");
-*/
-
-
-/*
-//  // demo useage of the mcp23017 io chipnote: this stops PWM on the flash working for some reason
-    #if useMCP23017 == 1
-      while(1) {
-          mcp.digitalWrite(0, HIGH);
-          int q = mcp.digitalRead(8);
-          client.print("<p>HIGH, input =" + String(q) + "</p>");
-          delay(1000);
-          mcp.digitalWrite(0, LOW);
-          client.print("<p>LOW</p>");
-          delay(1000);
-      }
-    #endif
-*/
-
-
- // -------------------------------------------------------------------
-
- client.println("<br><br><a href='/'>Return</a>");       // link back
- sendFooter(client);     // close web page
-
-}  // handleTest
-
-
-// ******************************************************************************************************************
-// end
