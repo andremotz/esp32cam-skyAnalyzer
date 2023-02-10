@@ -2,6 +2,9 @@
  #error This sketch is only for an ESP32Cam module
 #endif
 
+#define SSID_NAME "<ssid>"
+#define SSID_PASWORD "<password>"
+
 #include "esp_camera.h"         // https://github.com/espressif/esp32-camera
 
 #include <Arduino.h>
