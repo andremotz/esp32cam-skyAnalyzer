@@ -2,10 +2,8 @@
  #error This sketch is only for an ESP32Cam module
 #endif
 
-#define SSID_NAME "<ssid>"
-#define SSID_PASWORD "<password>"
-
 #include "esp_camera.h"         // https://github.com/espressif/esp32-camera
+#include "configuration.h"
 
 #include <Arduino.h>
 
@@ -38,6 +36,7 @@
 // ---------------------------------------------------------------
 
  const char* stitle = "ESP32Cam-demo";                  // title of this sketch
+ const char* sversion = "25Jan22";                      // Sketch version
 
  bool sendRGBfile = 0;                                  // if set '/rgb' will just return raw rgb data which can be saved as a file rather than display a HTML pag
 
@@ -164,7 +163,7 @@ void setup() {
 
    Serial.println("\n\n\n");                      // line feeds
    Serial.println("-----------------------------------");
-   Serial.printf("Starting - %s - %s \n", stitle);
+   Serial.printf("Starting - %s - %s \n", stitle, sversion);
    Serial.println("-----------------------------------");
    // Serial.print("Reset reason: " + ESP.getResetReason());
  }
@@ -204,7 +203,6 @@ void setup() {
    server.on("/img", handleImg);                 // show image from sd card
    server.on("/rgb", readRGBImage);              // demo converting image to RGB
    server.on("/getrgbjson", getrgbjson);              //andre's rgb json
-   server.on("/getrgbjsonnoflash", getrgbjsonnoflash);     //andre's rgb json no flash
    server.onNotFound(handleNotFound);            // invalid url requested
 
  // NTP - internet time
@@ -1055,9 +1053,9 @@ void handleNotFound() {
 
 void getrgbjson() {
   WiFiClient client = server.client();
+  uint32_t tTimer;     // used to time tasks    
   // json header
    sendHeaderJson(client);
-  uint32_t tTimer;     // used to time tasks    
 
   // make sure psram is available
   if (!psramFound()) {
@@ -1067,7 +1065,9 @@ void getrgbjson() {
     return;
   }
 
-  brightLed(128);
+  if (ENABLE_FLASH)
+    brightLed(128);
+
   camera_fb_t * fb = NULL;
   fb = esp_camera_fb_get();
   if (!fb) {
@@ -1076,35 +1076,20 @@ void getrgbjson() {
     return;
   }
 
-  void *ptrVal = NULL;                                                                                 // create a pointer for memory location to store the data
-  uint32_t ARRAY_LENGTH = fb->width * fb->height * 3;                                                  // calculate memory required to store the RGB data (i.e. number of pixels in the jpg image x 3)
+  void *ptrVal = NULL;                        // create a pointer for memory location to store the data
+  uint32_t ARRAY_LENGTH = fb->width * fb->height * 3;                     // calculate memory required to store the RGB data (i.e. number of pixels in the jpg image x 3)
   if (heap_caps_get_free_size( MALLOC_CAP_SPIRAM) <  ARRAY_LENGTH) {
     sendText(client,"error: not enough free psram to store the rgb data");
     return;
   }
-  ptrVal = heap_caps_malloc(ARRAY_LENGTH, MALLOC_CAP_SPIRAM);                                          // allocate memory space for the rgb data
-  uint8_t *rgb = (uint8_t *)ptrVal;                                                                    // create the 'rgb' array pointer to the allocated memory space
-
-  bool jpeg_converted = fmt2rgb888(fb->buf, fb->len, PIXFORMAT_JPEG, rgb);
-  if (!jpeg_converted) {
-    sendText(client,"error: failed to convert image to RGB data");
-
-    return;
-  }
-
-  if (sendRGBfile) {
-    client.write(rgb, ARRAY_LENGTH);          // send the raw rgb data
-    esp_camera_fb_return(fb);                 // camera frame buffer
-    delay(3);
-    client.stop();
-    return;
-  }
+  ptrVal = heap_caps_malloc(ARRAY_LENGTH, MALLOC_CAP_SPIRAM);                      // allocate memory space for the rgb data
+  uint8_t *rgb = (uint8_t *)ptrVal;                                                  // create the 'rgb' array pointer to the allocated memory space
 
   // find the average values for each colour over entire image
   uint32_t aRed = 0;
   uint32_t aGreen = 0;
   uint32_t aBlue = 0;
-  for (uint32_t i = 0; i < (ARRAY_LENGTH - 2); i+=3) {                                               // go through all data and add up totals
+  for (uint32_t i = 0; i < (ARRAY_LENGTH - 2); i+=3) {        // go through all data and add up totals
     aBlue+=rgb[i];
     aGreen+=rgb[i+1];
     aRed+=rgb[i+2];
@@ -1119,76 +1104,10 @@ void getrgbjson() {
   esp_camera_fb_return(fb);   // camera frame buffer
   heap_caps_free(ptrVal);     // rgb data
 
-  //ledcWrite(ledChannel, 0);   // change LED brightness (0 - 255)
-  brightLed(0);
+  if (ENABLE_FLASH)
+    brightLed(0);
 
-} //getrgbjson
-
-void getrgbjsonnoflash() {
-  WiFiClient client = server.client();
-  uint32_t tTimer;     // used to time tasks    
-  // json header
-   sendHeaderJson(client);
-
-  // make sure psram is available
-  if (!psramFound()) {
-    sendText(client,"error: no psram available to store the RGB data");
-    client.write("<br><a href='/'>Return</a>\n");       // link back
-    if (!sendRGBfile) sendFooter(client);               // close web page
-    return;
-  }
-
-  //brightLed(128);
-  camera_fb_t * fb = NULL;
-  fb = esp_camera_fb_get();
-  if (!fb) {
-    sendText(client,"error: failed to capture image from camera");
-    if (!sendRGBfile) sendFooter(client);               // close web page
-    return;
-  }
-
-  void *ptrVal = NULL;                                                                                 // create a pointer for memory location to store the data
-  uint32_t ARRAY_LENGTH = fb->width * fb->height * 3;                                                  // calculate memory required to store the RGB data (i.e. number of pixels in the jpg image x 3)
-  if (heap_caps_get_free_size( MALLOC_CAP_SPIRAM) <  ARRAY_LENGTH) {
-    sendText(client,"error: not enough free psram to store the rgb data");
-    return;
-  }
-  ptrVal = heap_caps_malloc(ARRAY_LENGTH, MALLOC_CAP_SPIRAM);                                          // allocate memory space for the rgb data
-  uint8_t *rgb = (uint8_t *)ptrVal;                                                                    // create the 'rgb' array pointer to the allocated memory space
-
-  bool jpeg_converted = fmt2rgb888(fb->buf, fb->len, PIXFORMAT_JPEG, rgb);
-  if (!jpeg_converted) {
-    sendText(client,"error: failed to convert image to RGB data");
-
-    return;
-  }
-
-  if (sendRGBfile) {
-    client.write(rgb, ARRAY_LENGTH);          // send the raw rgb data
-    esp_camera_fb_return(fb);                 // camera frame buffer
-    delay(3);
-    client.stop();
-    return;
-  }
-
-  // find the average values for each colour over entire image
-  uint32_t aRed = 0;
-  uint32_t aGreen = 0;
-  uint32_t aBlue = 0;
-  for (uint32_t i = 0; i < (ARRAY_LENGTH - 2); i+=3) {                                               // go through all data and add up totals
-    aBlue+=rgb[i];
-    aGreen+=rgb[i+1];
-    aRed+=rgb[i+2];
-  }
-  aRed = aRed / (fb->width * fb->height);                                                            // divide total by number of pixels to give the average value
-  aGreen = aGreen / (fb->width * fb->height);
-  aBlue = aBlue / (fb->width * fb->height);
-
-  if (!sendRGBfile) client.print("{\"red\": " + String(aRed) + ", \"green\": " + String(aGreen) + ", \"blue\": " + String(aBlue) + "}");
-
-  // finished with the data so free up the memory space used in psram
-  esp_camera_fb_return(fb);   // camera frame buffer
-  heap_caps_free(ptrVal);     // rgb data
+  client.stop();
 } //getrgbjsonnoflash
 
 void readRGBImage() {
